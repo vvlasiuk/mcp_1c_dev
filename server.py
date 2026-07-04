@@ -111,6 +111,18 @@ def get_query(query_name: str) -> dict:
 # ═══ ЗАПИС (розробка) ═══
 
 @mcp.tool()
+def generate_query(object_type: str, object_name: str) -> dict:
+    """Механічна чернетка запиту з опису об'єкта (БЕЗ запису на диск, без AI).
+    Дає надійну болванку: системні поля _* згори (для довідника 6, для документа 5),
+    решта реквізитів з коректним мапінгом типів, псевдонім дов/док, source_name.
+    Використовуй ЯК ОСНОВУ: візьми цю болванку, прибери зайві поля, задай осмислені
+    аліаси й query_name під завдання — і збережи через save_query.
+    object_type: "Справочник" | "Документ"; object_name: ім'я об'єкта.
+    Повертає {sel, meta}."""
+    return _call("/metadata/generate_query", {"object_type": object_type, "object_name": object_name})
+
+
+@mcp.tool()
 def save_query(sel: str, meta: dict, file_name: str = "") -> dict:
     """Зберегти запит (.sel + .json) на диск + гарячий перечит loader (без рестарту).
     sel: текст запиту 1С.
