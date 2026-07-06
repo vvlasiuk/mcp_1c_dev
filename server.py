@@ -31,6 +31,8 @@ _token = {"value": None}
 
 
 def _login():
+    if not API_URL:
+        raise RuntimeError("Не задано VPS_API_URL у конфігу MCP")
     if not USERNAME or not PASSWORD:
         raise RuntimeError("Не задано VPS_USERNAME / VPS_PASSWORD у конфігу MCP")
     resp = httpx.post(
@@ -134,6 +136,16 @@ def save_query(sel: str, meta: dict, file_name: str = "") -> dict:
                щоб перезаписати ТОЙ САМИЙ файл, а не створити дубль.
     Повертає {ok, query_name, path_sel, path_json, total_queries}."""
     return _call("/metadata/save_query", {"file_name": file_name, "sel": sel, "meta": meta})
+
+
+@mcp.tool()
+def create_backup(set_name: str = "full_html") -> dict:
+    """Створити повний zip-бекап (знімок) набору тек — роби ПЕРЕД блоком змін.
+    set_name: псевдонім набору (дефолт "full_html" = queries1c + html).
+    Автор знімка визначається за обліковкою MCP (з токена). Заразом чистить
+    прострочені тимчасові копії.
+    Повертає {ok, set_name, file, archived[], skipped[], temp_removed, warnings[]}."""
+    return _call("/backups/create", {"set_name": set_name})
 
 
 if __name__ == "__main__":
