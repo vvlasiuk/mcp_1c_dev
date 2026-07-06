@@ -148,5 +148,36 @@ def create_backup(set_name: str = "full_html") -> dict:
     return _call("/backups/create", {"set_name": set_name})
 
 
+# ═══ ФОРМИ / ФРОНТЕНД (html/) ═══
+
+@mcp.tool()
+def list_forms() -> dict:
+    """Перелік файлів фронтенду (html/) — .html/.css/.js, з усіх підпапок.
+    Кожен: {path (відносно html/), ext, writable, size}.
+    writable=true → у цей файл дозволено писати (тільки pages/ та menu/).
+    Повертає {total, files[]}."""
+    return _call("/forms/list", {})
+
+
+@mcp.tool()
+def read_form(path: str) -> dict:
+    """Прочитати вміст файлу з html/ (читання доступне по всій html/ — для контексту:
+    компоненти, стилі, наявні форми). path — відносний, напр. "components/ref_select.js"
+    або "pages/admin/users.html".
+    Повертає {path, content, writable}."""
+    return _call("/forms/read", {"path": path})
+
+
+@mcp.tool()
+def write_form(path: str, content: str) -> dict:
+    """Записати/перезаписати файл. ЗАПИС ДОЗВОЛЕНО ЛИШЕ в pages/ та menu/
+    (lib/, components/, system/ — тільки читання). Перед перезаписом наявного
+    робиться тимчасова копія. Підтеки створюються за потреби.
+    path: відносний шлях у html/, напр. "pages/nomenclature/list.html".
+    content: повний вміст файлу.
+    Повертає {ok, path}."""
+    return _call("/forms/write", {"path": path, "content": content})
+
+
 if __name__ == "__main__":
     mcp.run()
