@@ -99,7 +99,9 @@ def describe_object(object_type: str, object_name: str) -> dict:
 @mcp.tool()
 def list_queries(object_type: str, object_name: str) -> dict:
     """Наявні іменовані запити (.sel/.json), прив'язані до об'єкта 1С.
-    Повертає {total, queries:[{query_name, info, file, fields_count}]}."""
+    Повертає {total, queries:[{query_name, info, file, fields_count, mcp_allowed}]}.
+    mcp_allowed — чи дозволено виконувати запит через MCP-канал (керується полем
+    mcp_allowed у .json; при save_query можна виставити через meta)."""
     return _call("/metadata/queries", {"object_type": object_type, "object_name": object_name})
 
 
