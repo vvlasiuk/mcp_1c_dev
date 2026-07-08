@@ -143,7 +143,7 @@ def save_query(sel: str, meta: dict, file_name: str = "") -> dict:
 @mcp.tool()
 def create_backup(set_name: str = "full_html") -> dict:
     """Створити повний zip-бекап (знімок) набору тек — роби ПЕРЕД блоком змін.
-    set_name: псевдонім набору (дефолт "full_html" = queries1c + html).
+    set_name: псевдонім набору (дефолт "full_html" = queries1c + html + html_command_log).
     Автор знімка визначається за обліковкою MCP (з токена). Заразом чистить
     прострочені тимчасові копії.
     Повертає {ok, set_name, file, archived[], skipped[], temp_removed, warnings[]}."""
@@ -179,6 +179,28 @@ def write_form(path: str, content: str) -> dict:
     content: повний вміст файлу.
     Повертає {ok, path}."""
     return _call("/forms/write", {"path": path, "content": content})
+
+
+# ═══ ЖУРНАЛ КОМАНД (html_command_log/) ═══
+
+@mcp.tool()
+def log_command(cmd: str, desc: str, clar: str = "", why: str = "",
+                files: list = None) -> dict:
+    """Записати команду користувача в журнал (html_command_log/) — ОСТАННІЙ крок
+    блоку змін: бекап → зміни → log_command (закриваюча дужка ритуалу).
+    Створює один .md-файл: html_command_log/<user>/<дата>/<час>_<desc>.md.
+    cmd: суть команди користувача українською (обов'язкове, непорожнє).
+    desc: короткий ASCII-ідентифікатор для імені файлу — літери/цифри/дефіс/
+          підкреслення, без пробілів і кирилиці (напр. "currency-form-green").
+    clar: уточнення з діалогу (колір, код фільтра тощо).
+    why: мотив рішення, якщо був озвучений.
+    files: перелік зачеплених файлів (шляхи від кореня проекту), напр.
+           ["queries1c/catalogs/Валюты/cat_currencies.sel", "html/pages/..."].
+    user і час проставляє сервер. Порожній cmd/desc → помилка (нічого не пишемо).
+    Повертає {ok, file}."""
+    return _call("/command_log", {
+        "cmd": cmd, "desc": desc, "clar": clar, "why": why, "files": files or [],
+    })
 
 
 if __name__ == "__main__":
