@@ -11,6 +11,7 @@
 #   VPS_API_URL, VPS_USERNAME, VPS_PASSWORD
 
 import os
+from urllib.parse import quote
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -78,6 +79,27 @@ def _call(path: str, payload: dict) -> dict:
 
     return resp.json()
 
+
+def _get(path: str, params: dict = None) -> dict:
+    """GET-версія _call для читальних cf_module ендпойнтів (query-параметри)."""
+    url = f"{API_URL}{path}"
+    try:
+        resp = httpx.get(url, params=params or {}, headers=_headers(), timeout=60)
+        if resp.status_code == 401:
+            _login()
+            resp = httpx.get(url, params=params or {}, headers=_headers(), timeout=60)
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"vps_api недоступний: {exc}")
+
+    if resp.status_code != 200:
+        detail = resp.text[:300]
+        try:
+            detail = resp.json().get("detail", detail)
+        except Exception:
+            pass
+        raise RuntimeError(f"vps_api HTTP {resp.status_code}: {detail}")
+
+    return resp.json()
 
 # ═══ ЧИТАННЯ (контекст для генерації) ═══
 
@@ -201,6 +223,74 @@ def log_command(cmd: str, desc: str, clar: str = "", why: str = "",
     return _call("/command_log", {
         "cmd": cmd, "desc": desc, "clar": clar, "why": why, "files": files or [],
     })
+
+
+# ═══ КОД КОНФІГУРАЦІЇ (артефакт cf_module) — ЧИТАННЯ ═══
+# Читальні зрізи коду конфігурації з SQLite-маніфесту (кістяки, тіла, індекс).
+# Не чіпають бойові дані; допомагають орієнтуватися в коді при розробці запитів.
+
+@mcp.tool()
+def cf_where(name: str, export_only: bool = True) -> dict:
+    """Де оголошено процедуру/функцію 1С за ТОЧНИМ іменем.
+    export_only=True → лише експортні (публічний API конфігурації).
+    Повертає {name, results:[{name, kind, is_export, module_path, sig}]}."""
+    return _get(f"/cf_module/where/{quote(name)}",
+                {"export_only": "true" if export_only else "false"})
+
+
+@mcp.tool()
+def cf_search(prefix: str, export_only: bool = True, limit: int = 50) -> dict:
+    """Пошук символів за ПРЕФІКСОМ імені (навігація/автодоповнення).
+    Повертає {prefix, results:[{name, kind, is_export, module_path}]}."""
+    return _get("/cf_module/search",
+                {"prefix": prefix, "export_only": "true" if export_only else "false",
+                 "limit": limit})
+
+
+@mcp.tool()
+def cf_object_modules(object_type: str, object_name: str) -> dict:
+    """Усі модулі об'єкта 1С (модуль об'єкта, менеджера, форм) з ролями.
+    object_type: "Справочник" | "Документ" | "РегістрВідомостей" тощо.
+    Повертає {type, name, modules:[{module_path, role, proc_count, export_count}]}."""
+    return _get("/cf_module/object", {"type": object_type, "name": object_name})
+
+
+@mcp.tool()
+def cf_module_toc(module_path: str) -> dict:
+    """Зміст модуля: роль + перелік процедур (найдешевший зріз, без коду).
+    module_path — шлях модуля з cf_object_modules/cf_where (напр.
+    "Catalogs/Контрагенты/Ext/ObjectModule.bsl").
+    Повертає {module_path, role, proc_count, procedures:[{name, kind, is_export, significant_lines}]}."""
+    return _get("/cf_module/module/toc", {"path": module_path})
+
+
+@mcp.tool()
+def cf_skeleton(module_path: str, level: str = "compact") -> dict:
+    """Кістяк модуля БЕЗ тіл процедур (економія контексту для god-модулів).
+    level="compact" — лише сигнатури; level="full" — з доккоментарями-заголовками.
+    Повертає {module, level, text}."""
+    return _get("/cf_module/module/skeleton", {"path": module_path, "level": level})
+
+
+@mcp.tool()
+def cf_body(module_path: str, name: str) -> dict:
+    """Текст ЦІЛОЇ процедури/функції за модулем та іменем (сигнатура..Кінець).
+    Повертає {module, name, text}."""
+    return _get("/cf_module/body", {"module": module_path, "name": name})
+
+
+@mcp.tool()
+def cf_top_modules(limit: int = 20) -> dict:
+    """Найбільші модулі за кількістю процедур (орієнтація по god-модулях).
+    Повертає {results:[{module_path, role, proc_count, export_count}]}."""
+    return _get("/cf_module/modules/top", {"limit": limit})
+
+
+@mcp.tool()
+def cf_meta() -> dict:
+    """Свіжість артефакту cf_module: коли/з чого згенеровано, лічильники.
+    Повертає {generated_at, source_tree, modules, procedures, ...}."""
+    return _get("/cf_module/meta", {})
 
 
 if __name__ == "__main__":
