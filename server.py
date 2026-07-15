@@ -9,12 +9,19 @@
 # Залежності: pip install mcp httpx
 # Конфіг (claude_desktop_config.json → "env"):
 #   VPS_API_URL, VPS_USERNAME, VPS_PASSWORD
+#
+# Анотації інструментів (ToolAnnotations) керують групуванням у діалозі дозволів
+# Claude Desktop: readOnlyHint=True → група «Read-only» (можна дозволити гуртом
+# одним кліком); readOnlyHint=False + destructiveHint=True → група «Write/delete»
+# (залишається під окремим підтвердженням). Це НЕ обмежує самі інструменти —
+# лише впливає на UI дозволів клієнта.
 
 import os
 from urllib.parse import quote
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 try:
     from dotenv import load_dotenv
@@ -27,6 +34,11 @@ USERNAME = os.getenv("VPS_USERNAME", "")
 PASSWORD = os.getenv("VPS_PASSWORD", "")
 
 mcp = FastMCP("mcp_1c_dev")
+
+# Класи дозволів для UI Claude Desktop:
+_RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False)   # читання (нічого не змінює)
+_WR = ToolAnnotations(readOnlyHint=False, destructiveHint=True)   # запис/перезапис файлів
+_WA = ToolAnnotations(readOnlyHint=False, destructiveHint=False)  # додавання (лог/бекап)
 
 _token = {"value": None}
 
@@ -103,14 +115,14 @@ def _get(path: str, params: dict = None) -> dict:
 
 # ═══ ЧИТАННЯ (контекст для генерації) ═══
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def list_objects() -> dict:
     """Список об'єктів конфігурації 1С (довідники + документи).
     Повертає {total, objects:[{type, name, synonym}]}."""
     return _call("/1c/metadata_objects", {})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def describe_object(object_type: str, object_name: str) -> dict:
     """Опис об'єкта 1С: реквізити (з типами) + табличні частини.
     object_type: "Справочник" | "Документ"; object_name: ім'я об'єкта.
@@ -118,7 +130,7 @@ def describe_object(object_type: str, object_name: str) -> dict:
     return _call("/1c/metadata_describe", {"type": object_type, "name": object_name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def list_queries(object_type: str, object_name: str) -> dict:
     """Наявні іменовані запити (.sel/.json), прив'язані до об'єкта 1С.
     Повертає {total, queries:[{query_name, info, file, fields_count, mcp_allowed}]}.
@@ -127,7 +139,7 @@ def list_queries(object_type: str, object_name: str) -> dict:
     return _call("/metadata/queries", {"object_type": object_type, "object_name": object_name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def get_query(query_name: str) -> dict:
     """Сирий вміст запиту: текст .sel і метадані .json (поля, типи).
     Повертає {query_name, file, sel, meta}."""
@@ -136,7 +148,7 @@ def get_query(query_name: str) -> dict:
 
 # ═══ ЗАПИС (розробка) ═══
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def generate_query(object_type: str, object_name: str) -> dict:
     """Механічна чернетка запиту з опису об'єкта (БЕЗ запису на диск, без AI).
     Дає надійну болванку: системні поля _* згори (для довідника 6, для документа 5),
@@ -148,7 +160,7 @@ def generate_query(object_type: str, object_name: str) -> dict:
     return _call("/metadata/generate_query", {"object_type": object_type, "object_name": object_name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WR)
 def save_query(sel: str, meta: dict, file_name: str = "") -> dict:
     """Зберегти запит (.sel + .json) на диск + гарячий перечит loader (без рестарту).
     sel: текст запиту 1С.
@@ -162,7 +174,7 @@ def save_query(sel: str, meta: dict, file_name: str = "") -> dict:
     return _call("/metadata/save_query", {"file_name": file_name, "sel": sel, "meta": meta})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WA)
 def create_backup(set_name: str = "full_html") -> dict:
     """Створити повний zip-бекап (знімок) набору тек — роби ПЕРЕД блоком змін.
     set_name: псевдонім набору (дефолт "full_html" = queries1c + html + html_command_log).
@@ -174,7 +186,7 @@ def create_backup(set_name: str = "full_html") -> dict:
 
 # ═══ ФОРМИ / ФРОНТЕНД (html/) ═══
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def list_forms() -> dict:
     """Перелік файлів фронтенду (html/) — .html/.css/.js, з усіх підпапок.
     Кожен: {path (відносно html/), ext, writable, size}.
@@ -183,7 +195,7 @@ def list_forms() -> dict:
     return _call("/forms/list", {})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def read_form(path: str) -> dict:
     """Прочитати вміст файлу з html/ (читання доступне по всій html/ — для контексту:
     компоненти, стилі, наявні форми). path — відносний, напр. "components/ref_select.js"
@@ -192,7 +204,7 @@ def read_form(path: str) -> dict:
     return _call("/forms/read", {"path": path})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WR)
 def write_form(path: str, content: str) -> dict:
     """Записати/перезаписати файл. ЗАПИС ДОЗВОЛЕНО ЛИШЕ в pages/ та menu/
     (lib/, components/, system/ — тільки читання). Перед перезаписом наявного
@@ -205,7 +217,7 @@ def write_form(path: str, content: str) -> dict:
 
 # ═══ ЖУРНАЛ КОМАНД (html_command_log/) ═══
 
-@mcp.tool()
+@mcp.tool(annotations=_WA)
 def log_command(cmd: str, desc: str, clar: str = "", why: str = "",
                 files: list = None) -> dict:
     """Записати команду користувача в журнал (html_command_log/) — ОСТАННІЙ крок
@@ -229,7 +241,7 @@ def log_command(cmd: str, desc: str, clar: str = "", why: str = "",
 # Читальні зрізи коду конфігурації з SQLite-маніфесту (кістяки, тіла, індекс).
 # Не чіпають бойові дані; допомагають орієнтуватися в коді при розробці запитів.
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_where(name: str, export_only: bool = True) -> dict:
     """Де оголошено процедуру/функцію 1С за ТОЧНИМ іменем.
     export_only=True → лише експортні (публічний API конфігурації).
@@ -238,7 +250,7 @@ def cf_where(name: str, export_only: bool = True) -> dict:
                 {"export_only": "true" if export_only else "false"})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_search(prefix: str, export_only: bool = True, limit: int = 50) -> dict:
     """Пошук символів за ПРЕФІКСОМ імені (навігація/автодоповнення).
     Повертає {prefix, results:[{name, kind, is_export, module_path}]}."""
@@ -247,7 +259,7 @@ def cf_search(prefix: str, export_only: bool = True, limit: int = 50) -> dict:
                  "limit": limit})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_object_modules(object_type: str, object_name: str) -> dict:
     """Усі модулі об'єкта 1С (модуль об'єкта, менеджера, форм) з ролями.
     object_type: "Справочник" | "Документ" | "РегістрВідомостей" тощо.
@@ -255,7 +267,7 @@ def cf_object_modules(object_type: str, object_name: str) -> dict:
     return _get("/cf_module/object", {"type": object_type, "name": object_name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_module_toc(module_path: str) -> dict:
     """Зміст модуля: роль + перелік процедур (найдешевший зріз, без коду).
     module_path — шлях модуля з cf_object_modules/cf_where (напр.
@@ -264,7 +276,7 @@ def cf_module_toc(module_path: str) -> dict:
     return _get("/cf_module/module/toc", {"path": module_path})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_skeleton(module_path: str, level: str = "compact") -> dict:
     """Кістяк модуля БЕЗ тіл процедур (економія контексту для god-модулів).
     level="compact" — лише сигнатури; level="full" — з доккоментарями-заголовками.
@@ -272,25 +284,61 @@ def cf_skeleton(module_path: str, level: str = "compact") -> dict:
     return _get("/cf_module/module/skeleton", {"path": module_path, "level": level})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_body(module_path: str, name: str) -> dict:
     """Текст ЦІЛОЇ процедури/функції за модулем та іменем (сигнатура..Кінець).
     Повертає {module, name, text}."""
     return _get("/cf_module/body", {"module": module_path, "name": name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_top_modules(limit: int = 20) -> dict:
     """Найбільші модулі за кількістю процедур (орієнтація по god-модулях).
     Повертає {results:[{module_path, role, proc_count, export_count}]}."""
     return _get("/cf_module/modules/top", {"limit": limit})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO)
 def cf_meta() -> dict:
     """Свіжість артефакту cf_module: коли/з чого згенеровано, лічильники.
     Повертає {generated_at, source_tree, modules, procedures, ...}."""
     return _get("/cf_module/meta", {})
+
+
+@mcp.tool(annotations=_RO)
+def cf_find(query: str, match: str = "word", type: str = "", name: str = "",
+            path_prefix: str = "", role: str = "", max_modules: int = 200,
+            max_per_module: int = 20, context_lines: int = 0) -> dict:
+    """Знайти ВСІ використання імені/тексту в коді конфігурації (тіла процедур
+    + рівень модуля). Пошук завжди регістронезалежний (мова 1С така).
+
+    Це пошук ВИКОРИСТАНЬ (де згадується), на відміну від cf_where (де ВИЗНАЧЕНО)
+    і cf_search (префікс ІМЕНІ символу).
+
+    match: "word" — по межах ідентифікатора (типово; "Валюты" знайде
+           РегистрыСведений.Валюты, але не ВалютыДокумента);
+           "contains" — будь-де (уся родина імен); "prefix" — з початку слова.
+    Звуження (опційно): type(+name) — тип+ім'я об'єкта 1С (напр. "Справочник"/
+           "Валюты"); або path_prefix — префікс шляху; role — роль модуля.
+    ТЕКСТОВИЙ пошук: знаходить усі згадки імені; регістр від довідника з тим
+    самим іменем модель розрізняє за кваліфікатором у рядку
+    (РегистрыСведений.X vs Справочники.X), читаючи text.
+
+    Повертає {query, match, total_modules, total_hits, truncated,
+    results:[{module_path, role, hit_count, hits:[{line_no, container,
+    is_export, text}]}]}. container=null — рівень модуля; інакше ім'я
+    процедури-контейнера. Результати відсортовані за щільністю збігів."""
+    params = {"query": query, "match": match, "max_modules": max_modules,
+              "max_per_module": max_per_module, "context_lines": context_lines}
+    if type:
+        params["type"] = type
+    if name:
+        params["name"] = name
+    if path_prefix:
+        params["path_prefix"] = path_prefix
+    if role:
+        params["role"] = role
+    return _get("/cf_module/find", params)
 
 
 if __name__ == "__main__":
