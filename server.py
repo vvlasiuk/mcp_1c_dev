@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # server.py — MCP-сервер "mcp_1c_dev" (розробка запитів 1С).
-# Читання структури/запитів + ЗБЕРЕЖЕННЯ запиту. БЕЗ виконання запитів (run_query),
-# без доступу до бойових даних, без серверного AI (генерацію робить Claude у діалозі).
+# Читання структури/запитів + ЗБЕРЕЖЕННЯ запиту + ЗАПИС довідників і документів
+# (save_cat / save_doc).
+# БЕЗ run_query: MCP-канал (Claude) не читає бойові дані довільними запитами —
+# читання/запис бізнес-даних це роль веб-інтерфейсів vps_api, не MCP. Виняток —
+# свідомо дозволений запис довідників і документів через контрольовані
+# /1c/save_cat та /1c/save_doc. Серверного AI немає (генерацію робить Claude
+# у діалозі).
 #
 # Робочий цикл у Claude Desktop:
 #   describe_object → Claude сам складає .sel/.json → save_query.
@@ -144,6 +149,77 @@ def get_query(query_name: str) -> dict:
     """Сирий вміст запиту: текст .sel і метадані .json (поля, типи).
     Повертає {query_name, file, sel, meta}."""
     return _call("/metadata/query_get", {"query_name": query_name})
+
+
+# ═══ ЗАПИС ДАНИХ 1С — ДОВІДНИКИ + ДОКУМЕНТИ (БОЙОВІ ДАНІ) ═══
+# УВАГА: ці інструменти пишуть у РЕАЛЬНІ довідники/документи 1С через
+# /1c/save_cat та /1c/save_doc. На відміну від решти write-інструментів (які
+# чіпають лише артефакти розробки), вони змінюють бойові дані. Тому — анотація
+# _WR (окреме підтвердження щоразу).
+
+@mcp.tool(annotations=_WR)
+def save_cat(catalog: str, fields: dict, action: str = "write",
+             ref: str = "", version: str = "",
+             is_folder: bool = False, fields_search: dict = None) -> dict:
+    """Створити / змінити / позначити на видалення елемент довідника 1С.
+    ПИШЕ В БОЙОВІ ДАНІ — використовуй свідомо, звіряй значення перед викликом.
+
+    catalog: ім'я довідника (object_name), напр. "Валюты", "Контрагенты".
+    fields: реквізити у форматі {реквізит: {"type": ..., "value": ...}} —
+            той самий формат, що й params запиту та fields у save_doc.
+            Напр. {"Наименование": {"type": "string", "value": "Долар США"},
+                   "Код":         {"type": "string", "value": "840"}}.
+    action: "write" (типово) | "mark_delete" | "unmark_delete".
+    ref: посилання наявного елемента для ОНОВЛЕННЯ; "" → створити НОВИЙ.
+    version: ВерсіяДаних (оптимістичне блокування) — передавай отриману з
+             попереднього читання, щоб не затерти чужі зміни; "" → без перевірки.
+    is_folder: True → група (ЭтоГруппа); False → елемент.
+    fields_search: опційний іменований набір для find-or-create; структуру
+                   знає 1С; None → пропустити.
+    Повертає {ref, code, description, version, is_folder, marked}."""
+    payload = {
+        "catalog": catalog,
+        "ref": ref,
+        "version": version,
+        "action": action,
+        "is_folder": is_folder,
+        "fields": fields,
+    }
+    if fields_search is not None:
+        payload["fields_search"] = fields_search
+    return _call("/1c/save_cat", payload)
+
+
+@mcp.tool(annotations=_WR)
+def save_doc(document: str, date: str, fields: dict, action: str = "write",
+             ref: str = "", version: str = "", fields_search: dict = None) -> dict:
+    """Створити / провести / скасувати проведення / позначити на видалення документ 1С.
+    ПИШЕ В БОЙОВІ ДАНІ — використовуй свідомо, звіряй значення перед викликом.
+
+    document: ім'я документа (object_name), напр. "ПриемНаСервис".
+    date: дата документа в ISO (передається ЗАВЖДИ), напр. "2026-07-22T10:30:00".
+    fields: реквізити у форматі {реквізит: {"type": ..., "value": ...}} —
+            той самий формат, що й params запиту та fields у save_cat.
+    action: "write" (типово) | "post" | "unpost" | "mark_delete".
+    ref: посилання наявного документа для ОНОВЛЕННЯ; "" → створити НОВИЙ.
+    version: ВерсіяДаних (оптимістичне блокування) — з попереднього читання;
+             "" → без перевірки.
+    fields_search: опційний іменований набір для find-or-create; структуру
+                   знає 1С; None → пропустити.
+    УВАГА: реквізит "Ответственный" vps_api проставляє за обліковкою MCP —
+    тобто документ буде за акаунтом MCP, а не за реальним оператором.
+    Повертає {ref, number, date, version, posted, marked}."""
+    payload = {
+        "document": document,
+        "ref": ref,
+        "version": version,
+        "date": date,
+        "action": action,
+        "fields": fields,
+    }
+    if fields_search is not None:
+        payload["fields_search"] = fields_search
+    return _call("/1c/save_doc", payload)
 
 
 # ═══ ЗАПИС (розробка) ═══
