@@ -131,7 +131,10 @@ def list_objects() -> dict:
 def describe_object(object_type: str, object_name: str) -> dict:
     """Опис об'єкта 1С: реквізити (з типами) + табличні частини.
     object_type: "Справочник" | "Документ"; object_name: ім'я об'єкта.
-    Повертає {type, name, synonym, attributes[], tabular_sections[]}."""
+    Повертає {type, name, synonym, attributes[], tabular_sections[]}.
+    tabular_sections[]: [{name, synonym, attributes[{name, synonym, types[]}]}] —
+    використовуй ці імена ТЧ і реквізитів при формуванні tabular_sections для
+    save_cat / save_doc."""
     return _call("/1c/metadata_describe", {"type": object_type, "name": object_name})
 
 
@@ -160,7 +163,8 @@ def get_query(query_name: str) -> dict:
 @mcp.tool(annotations=_WR)
 def save_cat(catalog: str, fields: dict, action: str = "write",
              ref: str = "", version: str = "",
-             is_folder: bool = False, fields_search: dict = None) -> dict:
+             is_folder: bool = False, fields_search: dict = None,
+             tabular_sections: dict = None) -> dict:
     """Створити / змінити / позначити на видалення елемент довідника 1С.
     ПИШЕ В БОЙОВІ ДАНІ — використовуй свідомо, звіряй значення перед викликом.
 
@@ -176,6 +180,13 @@ def save_cat(catalog: str, fields: dict, action: str = "write",
     is_folder: True → група (ЭтоГруппа); False → елемент.
     fields_search: опційний іменований набір для find-or-create; структуру
                    знає 1С; None → пропустити.
+    tabular_sections: табличні частини у форматі
+            {ІмяТЧ: [{реквізит: {"type": ..., "value": ...}, ...}, ...]}.
+            Імена ТЧ і реквізитів бери з describe_object (tabular_sections[]).
+            УВАГА — кожна ТЧ, вказана тут, ПОВНІСТЮ ПЕРЕЗАПИСУЄТЬСЯ (старі
+            рядки очищуються, потім додаються нові з масиву). ТЧ, відсутні в
+            цьому словнику, не чіпаються. None/пропущено → жодна ТЧ не
+            змінюється. Неіснуюча назва ТЧ → помилка 400 від 1С.
     Повертає {ref, code, description, version, is_folder, marked}."""
     payload = {
         "catalog": catalog,
@@ -187,12 +198,15 @@ def save_cat(catalog: str, fields: dict, action: str = "write",
     }
     if fields_search is not None:
         payload["fields_search"] = fields_search
+    if tabular_sections is not None:
+        payload["tabular_sections"] = tabular_sections
     return _call("/1c/save_cat", payload)
 
 
 @mcp.tool(annotations=_WR)
 def save_doc(document: str, date: str, fields: dict, action: str = "write",
-             ref: str = "", version: str = "", fields_search: dict = None) -> dict:
+             ref: str = "", version: str = "", fields_search: dict = None,
+             tabular_sections: dict = None) -> dict:
     """Створити / провести / скасувати проведення / позначити на видалення документ 1С.
     ПИШЕ В БОЙОВІ ДАНІ — використовуй свідомо, звіряй значення перед викликом.
 
@@ -206,6 +220,13 @@ def save_doc(document: str, date: str, fields: dict, action: str = "write",
              "" → без перевірки.
     fields_search: опційний іменований набір для find-or-create; структуру
                    знає 1С; None → пропустити.
+    tabular_sections: табличні частини у форматі
+            {ІмяТЧ: [{реквізит: {"type": ..., "value": ...}, ...}, ...]}.
+            Імена ТЧ і реквізитів бери з describe_object (tabular_sections[]).
+            УВАГА — кожна ТЧ, вказана тут, ПОВНІСТЮ ПЕРЕЗАПИСУЄТЬСЯ (старі
+            рядки очищуються, потім додаються нові з масиву). ТЧ, відсутні в
+            цьому словнику, не чіпаються. None/пропущено → жодна ТЧ не
+            змінюється. Неіснуюча назва ТЧ → помилка 400 від 1С.
     УВАГА: реквізит "Ответственный" vps_api проставляє за обліковкою MCP —
     тобто документ буде за акаунтом MCP, а не за реальним оператором.
     Повертає {ref, number, date, version, posted, marked}."""
@@ -219,6 +240,8 @@ def save_doc(document: str, date: str, fields: dict, action: str = "write",
     }
     if fields_search is not None:
         payload["fields_search"] = fields_search
+    if tabular_sections is not None:
+        payload["tabular_sections"] = tabular_sections
     return _call("/1c/save_doc", payload)
 
 
