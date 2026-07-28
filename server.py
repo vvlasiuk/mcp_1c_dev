@@ -21,12 +21,16 @@
 # (залишається під окремим підтвердженням). Це НЕ обмежує самі інструменти —
 # лише впливає на UI дозволів клієнта.
 
+import json as _json
 import os
+import time as _time
 from urllib.parse import quote
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+
+from telemetry import record as _tel_record
 
 try:
     from dotenv import load_dotenv
@@ -78,45 +82,71 @@ def _headers():
 
 def _call(path: str, payload: dict) -> dict:
     url = f"{API_URL}{path}"
+    _req_b = len(_json.dumps(payload, ensure_ascii=False).encode())
+    _t0 = _time.perf_counter()
+    _resp = None
     try:
-        resp = httpx.post(url, json=payload, headers=_headers(), timeout=60)
-        if resp.status_code == 401:
-            _login()
-            resp = httpx.post(url, json=payload, headers=_headers(), timeout=60)
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"vps_api недоступний: {exc}")
-
-    if resp.status_code != 200:
-        detail = resp.text[:300]
         try:
-            detail = resp.json().get("detail", detail)
-        except Exception:
-            pass
-        raise RuntimeError(f"vps_api HTTP {resp.status_code}: {detail}")
+            _resp = httpx.post(url, json=payload, headers=_headers(), timeout=60)
+            if _resp.status_code == 401:
+                _login()
+                _resp = httpx.post(url, json=payload, headers=_headers(), timeout=60)
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"vps_api недоступний: {exc}")
 
-    return resp.json()
+        if _resp.status_code != 200:
+            detail = _resp.text[:300]
+            try:
+                detail = _resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise RuntimeError(f"vps_api HTTP {_resp.status_code}: {detail}")
+
+        result = _resp.json()
+        _tel_record(path, "POST", _req_b, len(_resp.content),
+                    round((_time.perf_counter() - _t0) * 1000, 1), True)
+        return result
+    except Exception as exc:
+        _res_b = len(_resp.content) if _resp is not None else 0
+        _tel_record(path, "POST", _req_b, _res_b,
+                    round((_time.perf_counter() - _t0) * 1000, 1), False, str(exc)[:200])
+        raise
 
 
 def _get(path: str, params: dict = None) -> dict:
     """GET-версія _call для читальних cf_module ендпойнтів (query-параметри)."""
     url = f"{API_URL}{path}"
+    _params = params or {}
+    _req_b = len(_json.dumps(_params, ensure_ascii=False).encode())
+    _t0 = _time.perf_counter()
+    _resp = None
     try:
-        resp = httpx.get(url, params=params or {}, headers=_headers(), timeout=60)
-        if resp.status_code == 401:
-            _login()
-            resp = httpx.get(url, params=params or {}, headers=_headers(), timeout=60)
-    except httpx.RequestError as exc:
-        raise RuntimeError(f"vps_api недоступний: {exc}")
-
-    if resp.status_code != 200:
-        detail = resp.text[:300]
         try:
-            detail = resp.json().get("detail", detail)
-        except Exception:
-            pass
-        raise RuntimeError(f"vps_api HTTP {resp.status_code}: {detail}")
+            _resp = httpx.get(url, params=_params, headers=_headers(), timeout=60)
+            if _resp.status_code == 401:
+                _login()
+                _resp = httpx.get(url, params=_params, headers=_headers(), timeout=60)
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"vps_api недоступний: {exc}")
 
-    return resp.json()
+        if _resp.status_code != 200:
+            detail = _resp.text[:300]
+            try:
+                detail = _resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise RuntimeError(f"vps_api HTTP {_resp.status_code}: {detail}")
+
+        result = _resp.json()
+        _tel_record(path, "GET", _req_b, len(_resp.content),
+                    round((_time.perf_counter() - _t0) * 1000, 1), True)
+        return result
+    except Exception as exc:
+        _res_b = len(_resp.content) if _resp is not None else 0
+        _tel_record(path, "GET", _req_b, _res_b,
+                    round((_time.perf_counter() - _t0) * 1000, 1), False, str(exc)[:200])
+        raise
+
 
 # ═══ ЧИТАННЯ (контекст для генерації) ═══
 
