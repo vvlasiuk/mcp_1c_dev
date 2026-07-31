@@ -148,13 +148,188 @@ def _get(path: str, params: dict = None) -> dict:
         raise
 
 
+# ═══ ФІЛЬТРАЦІЯ МЕТАДАНИХ (клієнтська, для list_objects) ═══
+# 1С віддає всі ~1250 об'єктів одним масивом (~170К символів). Фільтруємо тут,
+# у Python: BSL не чіпаємо, а в контекст моделі потрапляє лише потрібний зріз.
+# HTTP-трафік між server.py і 1С у токени не рахується — економія саме на
+# тому, що повертається інструментом.
+
+_CANON_TYPES = ("Справочник", "Документ", "РегістрВідомостей",
+                "РегістрНакопичення", "РегістрБухгалтерії", "Перелічення")
+
+# Орфографічна нормалізація рос↔укр: конфігурація історично змішана
+# (746 імен з ы/э/ё/ъ, 95 з і/ї/є/ґ). Зводимо до спільного вигляду, щоб
+# запит «регіон» знаходив довідник «Регионы», а «інструмент» — «Инструмента».
+_NORM_TBL = str.maketrans({
+    "і": "и", "ї": "и", "ы": "и", "є": "е", "э": "е", "ё": "е",
+    "ґ": "г", "ъ": "", "ь": "", "'": "", "\u2019": "", "`": "",
+})
+
+
+def _norm(s: str) -> str:
+    return (s or "").lower().translate(_NORM_TBL)
+
+
+_TYPE_ALIASES = {}
+
+
+def _reg_type(canon: str, *aliases):
+    for a in (canon,) + aliases:
+        _TYPE_ALIASES[_norm(a).replace(" ", "").replace("_", "")] = canon
+
+
+_reg_type("Справочник", "справочники", "довідник", "довідники",
+          "catalog", "catalogs", "спр")
+_reg_type("Документ", "документи", "документы", "document", "documents", "док")
+_reg_type("РегістрВідомостей", "регистрсведений", "регистрысведений",
+          "регістривідомостей", "регістр відомостей",
+          "inforegister", "informationregister", "рс")
+_reg_type("РегістрНакопичення", "регистрнакопления", "регистрынакопления",
+          "регістринакопичення", "регістр накопичення",
+          "accumulationregister", "рн")
+_reg_type("РегістрБухгалтерії", "регистрбухгалтерии", "регистрыбухгалтерии",
+          "регістрибухгалтерії", "регістр бухгалтерії",
+          "accountingregister", "рб")
+_reg_type("Перелічення", "переліки", "перечисление", "перечисления",
+          "enum", "enums", "пер")
+
+
+def _as_list(v) -> list:
+    """Толерантний ввід: приймаємо і рядок, і масив, і None."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    return [str(x) for x in v if str(x).strip()]
+
+
+def _resolve_types(object_type):
+    """Аліас → канонічний тип 1С. Повертає (типи, нерозпізнані)."""
+    out, bad = [], []
+    for raw in _as_list(object_type):
+        key = _norm(raw).replace(" ", "").replace("_", "")
+        canon = _TYPE_ALIASES.get(key)
+        if canon:
+            if canon not in out:
+                out.append(canon)
+        else:
+            bad.append(raw)
+    return out, bad
+
+
+def _match_score(obj: dict, nterms: list) -> int:
+    """Релевантність збігу: 3 — точний, 2 — префікс імені, 1 — в імені,
+    0 — лише в синонімі, -1 — не збіг. Потрібна, щоб при обрізанні по limit
+    відкидались найменш релевантні, а не випадкові."""
+    n = _norm(obj.get("name", ""))
+    s = _norm(obj.get("synonym", ""))
+    best = -1
+    for t in nterms:
+        if n == t or s == t:
+            best = max(best, 3)
+        elif n.startswith(t):
+            best = max(best, 2)
+        elif t in n:
+            best = max(best, 1)
+        elif t in s:
+            best = max(best, 0)
+    return best
+
+
+def _filter_objects(all_objs, object_type=None, name_contains=None,
+                    limit: int = 0, offset: int = 0) -> dict:
+    """Три режими відповіді за рівнем конкретики запиту (див. docstring інструмента)."""
+    types, bad = _resolve_types(object_type)
+    if bad:
+        return {"error": "Невідомий object_type: " + ", ".join(bad),
+                "allowed": list(_CANON_TYPES)}
+
+    nterms = [t for t in (_norm(x) for x in _as_list(name_contains)) if t]
+    pool = [o for o in all_objs if not types or o.get("type") in types]
+
+    # ── Режим "counts": без жодного фільтра → лише масштаб по типах.
+    if not types and not nterms:
+        counts = {}
+        for o in all_objs:
+            counts[o.get("type")] = counts.get(o.get("type"), 0) + 1
+        return {"mode": "counts", "total": len(all_objs), "counts": counts,
+                "hint": "Задай object_type (масив) та/або name_contains "
+                        "(масив термінів, OR) для деталізації."}
+
+    # ── Режим "search": є терміни → повна структура, за спаданням релевантності.
+    if nterms:
+        scored = []
+        for o in pool:
+            sc = _match_score(o, nterms)
+            if sc >= 0:
+                scored.append((sc, o))
+        scored.sort(key=lambda p: (-p[0], p[1].get("name", "")))
+        total = len(scored)
+        lim = limit if limit > 0 else 50
+        window = [o for _, o in scored[offset:offset + lim]]
+        res = {"mode": "search", "total": total, "returned": len(window),
+               "offset": offset, "truncated": offset + len(window) < total,
+               "objects": window}
+        if total == 0:
+            res["hint"] = ("Збігів немає. Спробуй інший корінь слова або "
+                           "рос./укр. відповідник (напр. 'упаковк' замість 'пакунк').")
+        return res
+
+    # ── Режим "names": лише типи → компактні імена, згруповані за типом.
+    lim = limit if limit > 0 else 500
+    grouped, taken, total = {}, 0, len(pool)
+    for t in types:
+        if taken >= lim:
+            break
+        names = sorted(o.get("name", "") for o in pool if o.get("type") == t)
+        grouped[t] = names[:lim - taken]
+        taken += len(grouped[t])
+    res = {"mode": "names", "total": total, "returned": taken,
+           "truncated": taken < total, "objects": grouped}
+    if res["truncated"]:
+        res["hint"] = ("Обрізано захисним лімітом. Звузь object_type або "
+                       "додай name_contains.")
+    return res
+
+
 # ═══ ЧИТАННЯ (контекст для генерації) ═══
 
 @mcp.tool(annotations=_RO)
-def list_objects() -> dict:
-    """Список об'єктів конфігурації 1С (довідники + документи).
-    Повертає {total, objects:[{type, name, synonym}]}."""
-    return _call("/1c/metadata_objects", {})
+def list_objects(object_type: list = None, name_contains: list = None,
+                 limit: int = 0, offset: int = 0) -> dict:
+    """Об'єкти конфігурації 1С: довідники, документи, регістри (відомостей,
+    накопичення, бухгалтерії) та переліки — усього ~1250.
+
+    Форма відповіді залежить від конкретики запиту (щоб не тягнути зайве):
+
+    1) БЕЗ параметрів → {mode:"counts", total, counts:{тип: кількість}} —
+       лише масштаб по типах, ~270 символів. Використовуй для орієнтації,
+       далі звужуй.
+    2) Лише object_type → {mode:"names", total, returned, truncated,
+       objects:{тип:[імена]}} — компактний список імен без синонімів.
+    3) Є name_contains → {mode:"search", total, returned, offset, truncated,
+       objects:[{type, name, synonym}]} — повна структура лише для збігів,
+       відсортована за релевантністю (точний збіг → префікс імені → входження
+       в ім'я → лише в синонімі), тож обрізання по limit прибирає найменш
+       доречне, а не випадкове.
+
+    object_type: масив типів (OR). Приймає рос./укр./англ. написання та
+        скорочення — "Справочник", "довідники", "catalogs", "спр" → Справочник;
+        "РегистрСведений", "регістр відомостей", "рс" → РегістрВідомостей;
+        "enum", "перечисления" → Перелічення. Нерозпізнаний тип → {error, allowed}.
+    name_contains: масив підрядків (OR), шукає в name І synonym одночасно,
+        без урахування регістру та рос↔укр орфографії (і/ї/ы→и, є/э/ё→е,
+        ґ→г, ъ/ь→∅). Тому "регіон" знаходить довідник "Регионы".
+        ВАЖЛИВО: нормалізація лікує різне НАПИСАННЯ, але не різні СЛОВА —
+        "пакунк" не знайде "Упаковка". Передавай кілька варіантів одразу:
+        ["пакунк","упаковк","відправлен","отправл"].
+    limit: 0 → авто (50 для пошуку, 500 для списку імен). offset: для хвоста
+        вибірки при truncated=true.
+
+    Обидва фільтри комбінуються (спершу тип, потім терміни)."""
+    data = _call("/1c/metadata_objects", {})
+    return _filter_objects(data.get("objects", []), object_type,
+                           name_contains, limit, offset)
 
 
 @mcp.tool(annotations=_RO)

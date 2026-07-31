@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Секрети: server.py викликає load_dotenv() — .env міститиме
+# VPS_USERNAME / VPS_PASSWORD. У репозиторій не потрапляє НІКОЛИ.
+.env
+.env.local
+
+# Віртуальні оточення
+.venv/
+venv/
+ENV/
+
+# Телеметрія викликів (дані виконання, ротується на місці)
+telemetry.jsonl
+
+# IDE
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
