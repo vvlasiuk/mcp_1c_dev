@@ -335,13 +335,54 @@ def list_objects(object_type: list = None, name_contains: list = None,
 @mcp.tool(annotations=_RO)
 def describe_object(object_type: str, object_name: str) -> dict:
     """Опис об'єкта 1С: реквізити (з типами) + табличні частини.
-    object_type: "Справочник" | "Документ"; object_name: ім'я об'єкта.
+    object_type: "Справочник" | "Документ" | "РегістрВідомостей" |
+    "РегістрНакопичення" | "РегістрБухгалтерії" | "Перелічення" — приймає
+    також рос./укр./англ. написання та скорочення (як list_objects):
+    "довідник", "catalog", "спр" → Справочник; "регистрсведений", "рс" →
+    РегістрВідомостей; "enum" → Перелічення тощо. Нерозпізнаний тип →
+    {error, allowed}, без звернення до 1С.
+    object_name: ім'я об'єкта.
     Повертає {type, name, synonym, attributes[], tabular_sections[]}.
     tabular_sections[]: [{name, synonym, attributes[{name, synonym, types[]}]}] —
     використовуй ці імена ТЧ і реквізитів при формуванні tabular_sections для
-    save_cat / save_doc."""
-    return _call("/1c/metadata_describe", {"type": object_type, "name": object_name})
+    save_cat / save_doc.
+    types[]: якщо тип реквізиту вузький (≤8 варіантів) — повний перелік
+    {kind:"ref", object} / {kind:"prim", name}. Якщо широкий складений тип
+    (напр. "посилання на будь-який документ") — один запис
+    {kind:"composite_summary", count, ref_count, prim_count, sample[]} замість
+    повного розгортання всіх варіантів.
 
+    Якщо об'єкта з такою точною назвою серед метаданих обраного типу немає —
+    помилка доповнюється підказкою: схожі імена метаданих (якщо знайдені) або
+    натяк, що це, можливо, реквізит форми/обробки (не метаданий-об'єкт) —
+    тоді варто спробувати cf_find."""
+    types, bad = _resolve_types(object_type)
+    if bad or not types:
+        return {"error": "Невідомий object_type: " + (", ".join(bad) or object_type),
+                "allowed": list(_CANON_TYPES)}
+    try:
+        return _call("/1c/metadata_describe", {"type": types[0], "name": object_name})
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "не знайдено" not in msg:
+            raise
+        # Об'єкта з такою точною назвою немає серед метаданих обраного типу —
+        # підкажемо схожі імена (як у list_objects) замість голої помилки 1С.
+        try:
+            hint_data = _call("/1c/metadata_objects", {})
+            hint = _filter_objects(hint_data.get("objects", []),
+                                   object_type=None, name_contains=[object_name],
+                                   limit=5)
+            candidates = hint.get("objects", [])
+        except Exception:
+            candidates = []
+        if candidates:
+            names = ", ".join(f"{o.get('type')}.{o.get('name')}" for o in candidates)
+            raise RuntimeError(f"{msg} Схожі об'єкти метаданих: {names}.")
+        raise RuntimeError(
+            f"{msg} Серед метаданих схожих імен не знайдено — можливо, це "
+            f"реквізит форми чи обробки, а не окремий об'єкт; спробуй cf_find."
+        )
 
 @mcp.tool(annotations=_RO)
 def list_queries(object_type: str, object_name: str) -> dict:
